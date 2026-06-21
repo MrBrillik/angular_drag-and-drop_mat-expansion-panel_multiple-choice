@@ -29,13 +29,16 @@ export class AppComponent {
     ],
     '1': [{ id: '3', name: 'Подпроект 1.1' }, { id: '4', name: 'Подпроект 1.2' }],
     '2': [{ id: '5', name: 'Подпроект 1.3' }, { id: '6', name: 'Подпроект 1.4' }],
-    '3': [],
+    '3': [{ id: '7', name: 'Подпроект 3' }],
   });
 
   rootProject = computed(() => this.projectMap()['__root__']?.[0]);
 
   // Автоматически собирает ID всех существующих в мапе списков для связи cdkDropList
   allDropLists = computed(() => {
-    return Object.keys(this.projectMap()).map(id => `body-${id}`);
+    // Исключаем служебный ключ "__root__"
+    return Object.keys(this.projectMap())
+      .filter(id => id !== '__root__')
+      .map(id => `body-${id}`);
   });
 }

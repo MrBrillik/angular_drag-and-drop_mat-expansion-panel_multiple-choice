@@ -1,11 +1,13 @@
-import { Component, Input, computed, WritableSignal, inject } from '@angular/core';
+import { Component, Input, computed, WritableSignal, inject, signal } from '@angular/core';
 import {
   CdkDrag,
   CdkDropList,
   CdkDragDrop,
   moveItemInArray,
   transferArrayItem,
-  CdkDragHandle
+  CdkDragHandle,
+  CdkDragPlaceholder,
+  CdkDragPreview
 } from '@angular/cdk/drag-drop';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { CommonModule } from '@angular/common';
@@ -19,11 +21,23 @@ export interface Project {
 @Component({
   selector: 'app-project-node',
   standalone: true,
-  imports: [CommonModule, MatExpansionModule, CdkDropList, CdkDrag, CdkDragHandle],
+  imports: [
+    CommonModule,
+    MatExpansionModule,
+    CdkDropList,
+    CdkDrag,
+    CdkDragHandle,
+    CdkDragPlaceholder,
+    CdkDragPreview
+  ],
   template: `
-    <mat-expansion-panel [expanded]="true" class="project-panel">
-      
-      <mat-expansion-panel-header>
+    <mat-expansion-panel #panel [expanded]="isExpanded()" class="project-panel">
+
+      <!-- Заголовок -->
+      <mat-expansion-panel-header
+        (mousedown)="onHeaderMouseDown($event, panel)"
+        (touchstart)="onHeaderTouchStart($event, panel)"
+      >
         <mat-panel-title>
           <span class="project-name">{{ project.name }}</span>
         </mat-panel-title>
@@ -37,37 +51,61 @@ export interface Project {
         [cdkDropListData]="children()"
         [cdkDropListConnectedTo]="getConnectedLists()"
         [cdkDropListDisabled]="isListDisabled()"
+        [cdkDropListSortPredicate]="sortPredicate"
         (cdkDropListDropped)="drop($event)"
         class="node-body"
+        [class.empty]="children().length === 0"
         [ngClass]="{
           'local-sort-active': dragService.mode() === 'local' && dragService.activeParentId() === project.id
         }"
       >
+        <!-- Подсказка для пустого списка (отображается только когда нет детей и нет перетаскивания) -->
+        @if (children().length === 0 && !dragService.activeParentId()) {
+          <div class="empty-hint">
+            Перетащите проект сюда
+          </div>
+        }
+
         @for (child of children(); track child.id) {
-          <div 
-            cdkDrag 
+          <div
+            cdkDrag
             [cdkDragData]="child"
             [cdkDragBoundary]="dragService.mode() === 'local' ? boundaryRef : ''"
             (cdkDragEnded)="dragService.clearDrag()"
-            (click)="onNodeClick($event, child.id)"
             class="drag-item-wrapper"
             [ngClass]="{ 'selected-node-active': dragService.isSelected(child.id) }"
           >
+            <!-- ПРЕВЬЮ под курсором -->
+            <ng-template cdkDragPreview>
+              <div class="custom-drag-preview">
+                Будет вставлено {{ getDraggedCount(child.id) }} элементов
+              </div>
+            </ng-template>
+
+            <!-- ПЛЕЙСХОЛДЕР места вставки -->
+            <ng-template cdkDragPlaceholder>
+              <div class="custom-multi-placeholder" [ngClass]="{ 'hide-placeholder': isSortingForbidden() }">
+                <div class="placeholder-badge">
+                  Место для {{ getDraggedCount(child.id) }} эл.
+                </div>
+              </div>
+            </ng-template>
+
             <!-- Контейнер для кнопок -->
             <div class="handles-container">
-              <!-- Кнопка 1: Полный перенос -->
-              <span 
-                cdkDragHandle 
-                class="drag-handle move-handle" 
+              <!-- Кнопка 1: Полный перенос (☰) -->
+              <span
+                cdkDragHandle
+                class="drag-handle move-handle"
                 title="Переместить в другой проект"
                 (mousedown)="dragService.startDrag('all', project.id)"
                 (touchstart)="dragService.startDrag('all', project.id)"
               >☰</span>
 
-              <!-- Кнопка 2: Только сортировка внутри текущего уровня -->
-              <span 
-                cdkDragHandle 
-                class="drag-handle sort-handle" 
+              <!-- Кнопка 2: Только сортировка (↕) -->
+              <span
+                cdkDragHandle
+                class="drag-handle sort-handle"
                 title="Изменить порядок в текущем проекте"
                 (mousedown)="dragService.startDrag('local', project.id)"
                 (touchstart)="dragService.startDrag('local', project.id)"
@@ -90,19 +128,28 @@ export interface Project {
   styles: [
     `
       :host { display: block; margin-bottom: 8px; }
-      
+
       .drag-item-wrapper {
         position: relative;
         margin-bottom: 10px;
-        transition: background-color 0.2s;
+        transition: background-color 0.2s, opacity 0.2s, transform 0.2s;
+        user-select: none;
       }
-      
-      /* Стилизация выделенного по Ctrl+Клик элемента */
+
       .drag-item-wrapper.selected-node-active {
         background-color: rgba(33, 150, 243, 0.08);
         border-left: 4px solid #2196f3;
       }
-      
+
+      /* Скрытие перетаскиваемых элементов (визуально) */
+      :host ::ng-deep .cdk-drop-list-dragging .drag-item-wrapper.selected-node-active,
+      :host ::ng-deep .drag-item-wrapper.cdk-drag-dragging {
+        opacity: 0 !important;
+        transform: scale(0) !important;
+        pointer-events: none !important;
+        transition: opacity 0.15s, transform 0.15s;
+      }
+
       .handles-container {
         position: absolute;
         left: 28px;
@@ -112,8 +159,8 @@ export interface Project {
         gap: 4px;
       }
 
-      .drag-handle { 
-        cursor: move; 
+      .drag-handle {
+        cursor: move;
         padding: 2px 8px;
         border-radius: 4px;
         background: #ffffff;
@@ -125,17 +172,43 @@ export interface Project {
       .drag-handle:hover { background: #f5f5f5; }
       .move-handle { color: #3f51b5; border-color: #3f51b5; }
       .sort-handle { color: #4caf50; border-color: #4caf50; }
-      
+
       .nested-node ::ng-deep .mat-content {
-        padding-left: 60px; 
+        padding-left: 60px;
       }
-      
+
       .node-body {
         padding-left: 12px;
-        min-height: 40px;
+        min-height: 60px; /* Увеличена для удобства перетаскивания в пустой список */
         background: rgba(0,0,0,0.01);
-        border: 1px dashed transparent;
+        border: 2px dashed transparent;
         transition: border 0.2s, background-color 0.2s;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        position: relative;
+      }
+
+      /* Когда список пуст, показываем подсказку и делаем зону более заметной */
+      .node-body.empty {
+        border-color: #e0e0e0;
+        background: rgba(0,0,0,0.02);
+        justify-content: center;
+        align-items: center;
+        min-height: 80px;
+      }
+
+      .node-body.empty .empty-hint {
+        color: #aaa;
+        font-size: 14px;
+        user-select: none;
+        pointer-events: none;
+      }
+
+      /* Подсветка при перетаскивании над пустым списком */
+      .node-body.cdk-drop-list-receiving.empty {
+        border-color: #3f51b5;
+        background: rgba(63, 81, 181, 0.05);
       }
 
       .node-body.local-sort-active {
@@ -143,19 +216,49 @@ export interface Project {
         border: 2px dashed #4caf50;
       }
 
-      .cdk-drop-list-receiving { 
-        border-color: #3f51b5; 
+      .cdk-drop-list-receiving {
+        border-color: #3f51b5;
         background-color: rgba(63, 81, 181, 0.04);
       }
-      
-      .cdk-drag-preview {
-        background: white;
+
+      .custom-multi-placeholder {
+        background: #fafafa;
+        border: 2px dashed #2196f3;
+        min-height: 46px;
         border-radius: 4px;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        opacity: 0.9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 10px;
       }
-      .cdk-drag-placeholder { opacity: 0.2; }
-    `,
+
+      .custom-multi-placeholder.hide-placeholder {
+        display: none !important;
+      }
+
+      .placeholder-badge {
+        background: #2196f3;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .custom-drag-preview {
+        background: #2196f3;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        box-shadow: 0 5px 15px rgba(33, 150, 243, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap;
+      }
+    `
   ],
 })
 export class ProjectNodeComponent {
@@ -166,9 +269,7 @@ export class ProjectNodeComponent {
 
   protected dragService = inject(ProjectDragService);
 
-  get isRoot(): boolean {
-    return this.project.id === 'root';
-  }
+  isExpanded = signal(true);
 
   get bodyListId(): string {
     return `body-${this.project.id}`;
@@ -190,18 +291,47 @@ export class ProjectNodeComponent {
     return false;
   });
 
-  /**
-   * Обработка клика по узлу. Если зажат Ctrl (или Meta на Mac), переключаем выделение.
-   * Иначе — сбрасываем выделение (стандартное поведение ОС).
-   */
-  onNodeClick(event: MouseEvent, childId: string) {
+  sortPredicate = (): boolean => {
+    if (this.dragService.mode() === 'local') {
+      return this.dragService.activeParentId() === this.project.id;
+    }
+    return false;
+  };
+
+  onHeaderMouseDown(event: MouseEvent, panel: any) {
+    if (event.button !== 0) return;
+
     if (event.ctrlKey || event.metaKey) {
-      event.stopPropagation(); // Чтобы клик не раскрывал/сворачивал mat-expansion-panel
-      this.dragService.toggleSelection(childId, this.project.id);
-    } else {
-      // Обычный клик без Ctrl снимает выделение со всей группы
+      event.preventDefault();
+      event.stopPropagation();
+      this.dragService.toggleSelection(this.project.id, this.currentParentId);
+      return;
+    }
+
+    this.isExpanded.update(v => !v);
+
+    const target = event.target as HTMLElement;
+    if (!target.classList.contains('drag-handle')) {
       this.dragService.clearSelection();
     }
+  }
+
+  onHeaderTouchStart(event: TouchEvent, panel: any) {
+    if (event.ctrlKey || event.metaKey) {
+      event.stopPropagation();
+      this.dragService.toggleSelection(this.project.id, this.currentParentId);
+    }
+  }
+
+  isSortingForbidden(): boolean {
+    return this.dragService.mode() === 'all' && this.dragService.activeParentId() === this.project.id;
+  }
+
+  getDraggedCount(childId: string): number {
+    const isSelected = this.dragService.isSelected(childId);
+    return isSelected && this.dragService.selectedIds().length > 1
+      ? this.dragService.selectedIds().length
+      : 1;
   }
 
   private getParentIdFromListId(listId: string): string {
@@ -213,23 +343,22 @@ export class ProjectNodeComponent {
     const newParentId = this.getParentIdFromListId(event.container.id);
     const draggedItem = event.item.data as Project;
 
-    // В режиме local запрещаем межконтейнерные операции на всякий случай
+    if (this.dragService.mode() === 'all' && prevParentId === newParentId) {
+      this.dragService.clearSelection();
+      return;
+    }
+
     if (this.dragService.mode() === 'local' && prevParentId !== newParentId) {
       this.dragService.clearSelection();
       return;
     }
 
-    // Собираем список перетаскиваемых проектов.
-    // Если перетаскиваемый элемент был выделен, берем всю группу выделенных.
-    // Если его не выделяли через Ctrl, тащим только его одного.
     const isGroupDrag = this.dragService.isSelected(draggedItem.id);
     const selectedIds = isGroupDrag ? this.dragService.selectedIds() : [draggedItem.id];
 
-    // Массив объектов, которые мы реально перемещаем
     const currentPrevItems = this.childrenMap()[prevParentId] ?? [];
     const itemsToMove = currentPrevItems.filter(item => selectedIds.includes(item.id));
 
-    // Проверка на циклическую вложенность (нельзя кинуть родителя в его ребенка)
     for (const item of itemsToMove) {
       if (this.isDescendant(item.id, newParentId)) {
         this.dragService.clearSelection();
@@ -240,25 +369,16 @@ export class ProjectNodeComponent {
     this.childrenMap.update((map) => {
       const nextMap = { ...map };
       const sourceList = [...(nextMap[prevParentId] ?? [])];
-
-      // Исключаем перемещаемые элементы из исходного списка
       const cleanSourceList = sourceList.filter(item => !selectedIds.includes(item.id));
 
       if (prevParentId === newParentId) {
-        // СЛУЧАЙ 1: Сортировка (внутри одного родителя)
-        // Определяем индекс, куда пользователь бросил элемент, в очищенном списке
         let targetIndex = event.currentIndex;
-
-        // Вставляем пачку элементов в целевую позицию
         cleanSourceList.splice(targetIndex, 0, ...itemsToMove);
         nextMap[prevParentId] = cleanSourceList;
       } else {
-        // СЛУЧАЙ 2: Перенос к другому родителю
         const targetList = [...(nextMap[newParentId] ?? [])];
         let targetIndex = event.currentIndex;
-
         targetList.splice(targetIndex, 0, ...itemsToMove);
-
         nextMap[prevParentId] = cleanSourceList;
         nextMap[newParentId] = targetList;
       }
@@ -266,7 +386,6 @@ export class ProjectNodeComponent {
       return nextMap;
     });
 
-    // Очищаем выделение после успешного дропа
     this.dragService.clearSelection();
   }
 

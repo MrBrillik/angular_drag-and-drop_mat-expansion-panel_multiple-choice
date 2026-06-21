@@ -9,9 +9,8 @@ export class ProjectDragService {
     mode = signal<DragMode>('all');
     activeParentId = signal<string | null>(null);
 
-    // Массив ID выбранных проектов
+    // Массив ID выбранных проектов (Ctrl+клик)
     selectedIds = signal<string[]>([]);
-    // ID родителя, из которого сейчас выбраны элементы
     selectedParentId = signal<string | null>(null);
 
     startDrag(mode: DragMode, parentId: string) {
@@ -24,28 +23,22 @@ export class ProjectDragService {
         this.activeParentId.set(null);
     }
 
-    /**
-     * Логика выделения элементов по Ctrl + Клик
-     */
     toggleSelection(projectId: string, parentId: string) {
-        // Если выделяем элемент из другого родителя — сбрасываем старое выделение
         if (this.selectedParentId() !== parentId) {
             this.selectedIds.set([projectId]);
             this.selectedParentId.set(parentId);
             return;
         }
 
-        const currentSelected = this.selectedIds();
-        if (currentSelected.includes(projectId)) {
-            // Убираем выделение, если уже выделен
-            const updated = currentSelected.filter(id => id !== projectId);
+        const current = this.selectedIds();
+        if (current.includes(projectId)) {
+            const updated = current.filter(id => id !== projectId);
             this.selectedIds.set(updated);
             if (updated.length === 0) {
                 this.selectedParentId.set(null);
             }
         } else {
-            // Добавляем в список выделенных
-            this.selectedIds.set([...currentSelected, projectId]);
+            this.selectedIds.set([...current, projectId]);
         }
     }
 
