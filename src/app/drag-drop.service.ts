@@ -36,8 +36,6 @@ export class DragDropService {
         if (event.button !== 0) return;
 
         const ctrl = event.ctrlKey || event.metaKey;
-
-        // Запоминаем коллбек — он сработает на MouseUp, если мышь не двигалась
         this.onToggleExpandCallback = toggleExpandFn;
 
         if (ctrl) {
@@ -75,12 +73,11 @@ export class DragDropService {
 
             if (newSet.size > 0) {
                 const selectedIdsArray = Array.from(newSet);
-                // Исправлено: берем первый строковый ID из массива
                 const firstId: string = selectedIdsArray[0];
                 const existingParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === firstId));
 
                 if (currentParentId !== existingParentId) {
-                    return new Set([projectId]); // Сброс группы при клике в другой папке
+                    return new Set([projectId]);
                 }
             }
 
@@ -167,7 +164,13 @@ export class DragDropService {
         }
 
         if (emptyZone) {
-            const zoneId = emptyZone.dataset['dropZoneId'];
+            let zoneId = emptyZone.dataset['dropZoneId'];
+
+            // ИСПРАВЛЕНИЕ: Если мышка над виртуальным __root__, превращаем её в легитимный 'root'
+            if (zoneId === '__root__') {
+                zoneId = 'root';
+            }
+
             if (!zoneId || this.dragIds.includes(zoneId) || this.isTargetChildOfDragged(zoneId)) {
                 this.renderer.addClass(emptyZone, 'drop-denied');
                 this.currentDropPosition = null;
@@ -240,7 +243,6 @@ export class DragDropService {
                     if (id) this.selectedIds.set(new Set([id]));
                 }
 
-                // Вызываем коллбек — панель инвертирует expanded() в ЛЮБОМ случае (и с Ctrl, и без)
                 if (this.onToggleExpandCallback) {
                     this.onToggleExpandCallback();
                 }
@@ -271,7 +273,13 @@ export class DragDropService {
             const map = this.getChildrenMap();
 
             if (this.currentDropPosition === 'inside') {
-                const targetParentId = this.currentTargetElement.dataset['projectId'] || this.currentTargetElement.dataset['dropZoneId']!;
+                let targetParentId = this.currentTargetElement.dataset['projectId'] || this.currentTargetElement.dataset['dropZoneId']!;
+
+                // ИСПРАВЛЕНИЕ: Если целевой ID определился как виртуальный корень, подменяем на 'root'
+                if (targetParentId === '__root__') {
+                    targetParentId = 'root';
+                }
+
                 if (this.moveCallback) {
                     this.moveCallback(this.dragIds, targetParentId, undefined, 'inside');
                 }
@@ -283,8 +291,6 @@ export class DragDropService {
                     this.moveCallback(this.dragIds, targetParentId, relativeToId, this.currentDropPosition);
                 }
             }
-
-            this.selectedIds.set(new Set());
-        } this.isDragging.set(false); this.potentialDrag = false; this.dragIds = []; this.currentTargetElement = null; this.currentDropPosition = null; this.onToggleExpandCallback = null;
+        } this.selectedIds.set(new Set()); this.isDragging.set(false); this.potentialDrag = false; this.dragIds = []; this.currentTargetElement = null; this.currentDropPosition = null; this.onToggleExpandCallback = null;
     } private stopPotentialDrag() { this.clearGlobalListeners(); this.potentialDrag = false; this.mouseMoved = false; this.onToggleExpandCallback = null; } private disableTextSelection() { this.renderer.setStyle(document.body, 'user-select', 'none'); this.renderer.setStyle(document.body, '-webkit-user-select', 'none'); } private enableTextSelection() { this.renderer.removeStyle(document.body, 'user-select'); this.renderer.removeStyle(document.body, '-webkit-user-select'); } private clearGlobalListeners() { this.removeGlobalListeners.forEach(fn => fn()); this.removeGlobalListeners = []; }
 }

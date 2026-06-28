@@ -8,8 +8,7 @@ import { DragDropService } from './drag-drop.service';
   standalone: true,
   imports: [ProjectNodeComponent],
   template: `
-    <!-- Корневой контейнер теперь тоже является Drop-зоной для пустых пространств -->
-    <div class="tree-container drop-zone" data-drop-zone-id="__root__">
+    <div class="tree-container">
       @if (rootProject(); as root) {
         <app-project-node
           [project]="root"
@@ -49,6 +48,11 @@ export class AppComponent {
       const newMap = { ...map };
       const removedElements: Project[] = [];
 
+      // СТРАХОВКА: Если по ошибке определился виртуальный __root__, перенаправляем в реальный root
+      if (targetParentId === '__root__') {
+        targetParentId = 'root';
+      }
+
       // 1. Извлекаем переносимые элементы
       for (const [parentId, children] of Object.entries(newMap)) {
         const kept = children.filter(c => !ids.includes(c.id));
@@ -65,11 +69,11 @@ export class AppComponent {
 
       const targetChildren = [...newMap[targetParentId]];
 
-      // 2. Если вставляем внутрь пустой папки или напрямую в drop-зону без относительного ID
+      // 2. Если вставляем внутрь папки (в пустую область или по центру заголовка)
       if (!relativeToId || position === 'inside') {
         targetChildren.push(...removedElements);
       } else {
-        // 3. Если вставляем относительно соседа (сортировка)
+        // 3. Если сортируем перед/после соседа
         const referenceIndex = targetChildren.findIndex(p => p.id === relativeToId);
         let insertIndex = targetChildren.length;
 
