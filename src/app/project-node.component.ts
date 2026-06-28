@@ -1,5 +1,4 @@
 import { Component, Input, computed, signal, Signal } from '@angular/core';
-import { MatExpansionModule } from '@angular/material/expansion';
 import { CommonModule } from '@angular/common';
 import { Project } from './project.interface';
 import { DragDropService } from './drag-drop.service';
@@ -7,49 +6,97 @@ import { DragDropService } from './drag-drop.service';
 @Component({
   selector: 'app-project-node',
   standalone: true,
-  imports: [MatExpansionModule, CommonModule],
+  imports: [CommonModule],
   template: `
-    <mat-expansion-panel
-      class="project-panel"
-      [expanded]="expanded()"
-      hideToggle
-    >
-      <!-- 
-        Добавили (click.meta) и (click.control) с остановкой всплытия, 
-        чтобы клик с зажатыми клавишами-модификаторами не долетал до внутренностей Material
-      -->
-      <mat-expansion-panel-header
+    <div class="custom-project-panel">
+      
+      <div 
         class="panel-header"
         [class.selected]="isSelected()"
         (mousedown)="onHeaderMouseDown($event)"
-        (click)="$event.stopPropagation(); $event.preventDefault()"
-        (click.control)="$event.stopPropagation(); $event.preventDefault()"
-        (click.meta)="$event.stopPropagation(); $event.preventDefault()"
         [attr.data-project-id]="project.id"
       >
-        <mat-panel-title>{{ project.name }}</mat-panel-title>
-      </mat-expansion-panel-header>
-
-      <div class="children-container drop-zone" [attr.data-drop-zone-id]="project.id">
-        @for (child of children(); track child.id) {
-          <app-project-node
-            [project]="child"
-            [projectMapSignal]="projectMapSignal"
-          />
-        }
+        <span 
+          class="expand-arrow" 
+          [class.arrow-rotated]="expanded()"
+          *ngIf="children().length > 0"
+        >▶</span>
+        
+        <span class="project-name">{{ project.name }}</span>
       </div>
-    </mat-expansion-panel>
+
+      <div 
+        class="children-container" 
+        [class.drop-zone]="expanded() || children().length === 0"
+        [class.content-hidden]="!expanded()"
+        [attr.data-drop-zone-id]="project.id"
+      >
+        <ng-container *ngIf="expanded()">
+          @for (child of children(); track child.id) {
+            <app-project-node
+              [project]="child"
+              [projectMapSignal]="projectMapSignal"
+            />
+          }
+        </ng-container>
+      </div>
+
+    </div>
   `,
   styles: [`
-    .project-panel { margin: 2px 0; box-shadow: none !important; border: 1px solid #e0e0e0; }
-    .panel-header { cursor: grab; user-select: none; -webkit-user-select: none; position: relative; }
-    .panel-header:active { cursor: grabbing; }
+    .custom-project-panel {
+      margin: 4px 0;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      background: #ffffff;
+      overflow: hidden;
+      display: block;
+    }
+    
+    .panel-header { 
+      position: relative; 
+      user-select: none; 
+      -webkit-user-select: none;
+      display: flex;
+      align-items: center;
+      height: 48px; 
+      padding: 0 16px;
+      cursor: grab !important;
+      transition: background-color 0.2s ease;
+    }
+    .panel-header:active { cursor: grabbing !important; }
     .panel-header.selected { background: #b3e5fc !important; }
     
-    .children-container { padding-left: 20px; min-height: 12px; transition: background-color 0.15s; }
+    .expand-arrow {
+      margin-right: 8px;
+      font-size: 11px;
+      color: #757575;
+      transition: transform 0.2s ease;
+      display: inline-block;
+    }
+    .arrow-rotated {
+      transform: rotate(90deg);
+    }
+    .project-name {
+      font-size: 14px;
+      color: #333333;
+    }
+    
+    .children-container { 
+      padding-left: 20px; 
+      transition: background-color 0.15s, height 0.2s; 
+    }
+    
+    .content-hidden {
+      display: none;
+    }
     
     .children-container.drop-inside {
-      background-color: rgba(76, 175, 80, 0.15) !important; border: 1px dashed #4caf50;
+      display: block !important;
+      background-color: rgba(76, 175, 80, 0.15) !important; 
+      border: 1px dashed #4caf50;
+      min-height: 24px;
+      margin: 4px 4px 4px 20px;
     }
 
     .panel-header.drop-before::before {
@@ -59,7 +106,8 @@ import { DragDropService } from './drag-drop.service';
       content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #4caf50; z-index: 10;
     }
     .panel-header.drop-inside {
-      background-color: rgba(76, 175, 80, 0.2) !important; border: 1px dashed #4caf50;
+      background-color: rgba(76, 175, 80, 0.2) !important;
+      border: 1px dashed #4caf50;
     }
     .panel-header.drop-denied, .children-container.drop-denied {
       background-color: rgba(244, 67, 54, 0.15) !important;
@@ -80,8 +128,14 @@ export class ProjectNodeComponent {
   onHeaderMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
 
-    // Передаем коллбек управления открытием/закрытием
-    const toggleExpandFn = () => this.expanded.set(!this.expanded());
+    const ctrl = event.ctrlKey || event.metaKey;
+
+    // ИСПРАВЛЕНИЕ: Если зажат Ctrl, передаем пустую заглушку () => {}.
+    // Панель останется на месте. Если Ctrl не зажат — передаем рабочий переключатель.
+    const toggleExpandFn = ctrl
+      ? () => { }
+      : () => this.expanded.set(!this.expanded());
+
     this.dragDrop.onHeaderMouseDown(event, this.project.id, toggleExpandFn);
   }
 }

@@ -10,7 +10,6 @@ export class DragDropService {
 
     private dragIds: string[] = [];
     private ghostElement: HTMLElement | null = null;
-    private userSelectStyle: HTMLStyleElement | null = null;
 
     moveCallback!: (ids: string[], targetParentId: string, relativeToId?: string, position?: DropPosition) => void;
     getChildrenMap!: () => Record<string, Project[]>;
@@ -38,13 +37,12 @@ export class DragDropService {
 
         const ctrl = event.ctrlKey || event.metaKey;
 
-        // Если нажат Ctrl — отменяем коллбек сворачивания/разворачивания, панель не среагирует
-        this.onToggleExpandCallback = ctrl ? null : toggleExpandFn;
+        // Запоминаем коллбек — он сработает на MouseUp, если мышь не двигалась
+        this.onToggleExpandCallback = toggleExpandFn;
 
         if (ctrl) {
             this.toggleSelection(projectId);
         } else {
-            // Обычный клик без Ctrl: если элемент уже в выделении, не сбрасываем сразу (чтобы можно было начать тянуть группу)
             if (!this.selectedIds().has(projectId)) {
                 this.selectedIds.set(new Set([projectId]));
             }
@@ -64,7 +62,6 @@ export class DragDropService {
 
     private toggleSelection(projectId: string) {
         const map = this.getChildrenMap();
-        // Ищем родителя для текущего кликнутого элемента
         const currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === projectId));
         if (!currentParentId) return;
 
@@ -76,14 +73,14 @@ export class DragDropService {
                 return newSet;
             }
 
-            // Если в сете уже есть элементы, проверяем, совпадают ли у них родители
             if (newSet.size > 0) {
-                const firstSelectedId = Array.from(newSet)[0];
-                const existingParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === firstSelectedId));
+                const selectedIdsArray = Array.from(newSet);
+                // Исправлено: берем первый строковый ID из массива
+                const firstId: string = selectedIdsArray[0];
+                const existingParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === firstId));
 
-                // Если родители разные — блокируем добавление, возвращаем стейт без изменений
                 if (currentParentId !== existingParentId) {
-                    return set;
+                    return new Set([projectId]); // Сброс группы при клике в другой папке
                 }
             }
 
@@ -236,7 +233,6 @@ export class DragDropService {
             this.finishDrag();
         } else {
             if (!this.mouseMoved) {
-                // Если кликнули БЕЗ Ctrl — сбрасываем старый выбор и оставляем активным только текущий узел
                 if (!ctrl) {
                     const clickedZone = event.target as HTMLElement;
                     const header = clickedZone.closest('.panel-header') as HTMLElement;
@@ -244,7 +240,7 @@ export class DragDropService {
                     if (id) this.selectedIds.set(new Set([id]));
                 }
 
-                // Вызываем открытие панели, только если onToggleExpandCallback не занулился из-за Ctrl
+                // Вызываем коллбек — панель инвертирует expanded() в ЛЮБОМ случае (и с Ctrl, и без)
                 if (this.onToggleExpandCallback) {
                     this.onToggleExpandCallback();
                 }
@@ -280,8 +276,15 @@ export class DragDropService {
                     this.moveCallback(this.dragIds, targetParentId, undefined, 'inside');
                 }
             } else {
-                const relativeToId = this.currentTargetElement.dataset['projectId']!; const targetParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === relativeToId)); if (targetParentId && this.moveCallback) { this.moveCallback(this.dragIds, targetParentId, relativeToId, this.currentDropPosition); }
-            } this.selectedIds.set(new Set());
+                const relativeToId = this.currentTargetElement.dataset['projectId']!;
+                const targetParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === relativeToId));
+
+                if (targetParentId && this.moveCallback) {
+                    this.moveCallback(this.dragIds, targetParentId, relativeToId, this.currentDropPosition);
+                }
+            }
+
+            this.selectedIds.set(new Set());
         } this.isDragging.set(false); this.potentialDrag = false; this.dragIds = []; this.currentTargetElement = null; this.currentDropPosition = null; this.onToggleExpandCallback = null;
     } private stopPotentialDrag() { this.clearGlobalListeners(); this.potentialDrag = false; this.mouseMoved = false; this.onToggleExpandCallback = null; } private disableTextSelection() { this.renderer.setStyle(document.body, 'user-select', 'none'); this.renderer.setStyle(document.body, '-webkit-user-select', 'none'); } private enableTextSelection() { this.renderer.removeStyle(document.body, 'user-select'); this.renderer.removeStyle(document.body, '-webkit-user-select'); } private clearGlobalListeners() { this.removeGlobalListeners.forEach(fn => fn()); this.removeGlobalListeners = []; }
 }
