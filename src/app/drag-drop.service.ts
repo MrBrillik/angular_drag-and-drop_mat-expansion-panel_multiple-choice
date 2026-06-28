@@ -1,6 +1,8 @@
 import { Injectable, signal, Renderer2, RendererFactory2 } from '@angular/core';
 import { Project } from './project.interface';
 
+export type DropPosition = 'before' | 'after' | 'inside';
+
 @Injectable({ providedIn: 'root' })
 export class DragDropService {
     readonly selectedIds = signal<Set<string>>(new Set());
@@ -10,7 +12,7 @@ export class DragDropService {
     private ghostElement: HTMLElement | null = null;
     private userSelectStyle: HTMLStyleElement | null = null;
 
-    moveCallback!: (ids: string[], targetParentId: string) => void;
+    moveCallback!: (ids: string[], targetParentId: string, relativeToId?: string, position?: DropPosition) => void;
     getChildrenMap!: () => Record<string, Project[]>;
 
     private startMouseX = 0;
@@ -19,11 +21,11 @@ export class DragDropService {
     private currentMouseY = 0;
     private mouseMoved = false;
     private potentialDrag = false;
-    private currentDropZone: HTMLElement | null = null;
 
-    // Коллбек для открытия папки, если движение мыши не превратилось в перетаскивание
+    private currentTargetElement: HTMLElement | null = null;
+    private currentDropPosition: DropPosition | null = null;
+
     private onToggleExpandCallback: (() => void) | null = null;
-
     private renderer: Renderer2;
     private removeGlobalListeners: (() => void)[] = [];
 
@@ -35,13 +37,14 @@ export class DragDropService {
         if (event.button !== 0) return;
 
         const ctrl = event.ctrlKey || event.metaKey;
-        this.onToggleExpandCallback = toggleExpandFn;
 
-        // С логикой выделения:
+        // Если нажат Ctrl — отменяем коллбек сворачивания/разворачивания, панель не среагирует
+        this.onToggleExpandCallback = ctrl ? null : toggleExpandFn;
+
         if (ctrl) {
             this.toggleSelection(projectId);
         } else {
-            // Если элемент уже выбран, не сбрасываем сразу (вдруг пользователь хочет начать тянуть всю группу)
+            // Обычный клик без Ctrl: если элемент уже в выделении, не сбрасываем сразу (чтобы можно было начать тянуть группу)
             if (!this.selectedIds().has(projectId)) {
                 this.selectedIds.set(new Set([projectId]));
             }
@@ -60,10 +63,31 @@ export class DragDropService {
     }
 
     private toggleSelection(projectId: string) {
+        const map = this.getChildrenMap();
+        // Ищем родителя для текущего кликнутого элемента
+        const currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === projectId));
+        if (!currentParentId) return;
+
         this.selectedIds.update(set => {
             const newSet = new Set(set);
-            if (newSet.has(projectId)) newSet.delete(projectId);
-            else newSet.add(projectId);
+
+            if (newSet.has(projectId)) {
+                newSet.delete(projectId);
+                return newSet;
+            }
+
+            // Если в сете уже есть элементы, проверяем, совпадают ли у них родители
+            if (newSet.size > 0) {
+                const firstSelectedId = Array.from(newSet)[0];
+                const existingParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === firstSelectedId));
+
+                // Если родители разные — блокируем добавление, возвращаем стейт без изменений
+                if (currentParentId !== existingParentId) {
+                    return set;
+                }
+            }
+
+            newSet.add(projectId);
             return newSet;
         });
     }
@@ -78,7 +102,6 @@ export class DragDropService {
         const dy = event.clientY - this.startMouseY;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        // Порог в 5 пикселей, отделяющий клик от начала перетаскивания
         if (!this.mouseMoved && distance > 5) {
             this.mouseMoved = true;
             const selection = this.selectedIds();
@@ -93,20 +116,18 @@ export class DragDropService {
         if (this.isDragging()) {
             event.preventDefault();
             this.updateGhostPosition();
-            this.highlightDropZone(event);
+            this.calculateDropTarget(event);
         }
     }
 
     private startDrag(ids: string[]) {
         this.dragIds = [...ids];
 
-        // Визуальный кастомный эффект для перетаскиваемых панелей
         ids.forEach(id => {
             const el = document.querySelector(`[data-project-id="${id}"]`) as HTMLElement;
             if (el) this.renderer.setStyle(el, 'opacity', '0.4');
         });
 
-        // Создаем Ghost-элемент
         this.ghostElement = this.renderer.createElement('div');
         this.renderer.setStyle(this.ghostElement, 'position', 'fixed');
         this.renderer.setStyle(this.ghostElement, 'z-index', '9999');
@@ -116,15 +137,13 @@ export class DragDropService {
         this.renderer.setStyle(this.ghostElement, 'padding', '8px 14px');
         this.renderer.setStyle(this.ghostElement, 'border-radius', '4px');
         this.renderer.setStyle(this.ghostElement, 'box-shadow', '0 5px 15px rgba(0,0,0,0.3)');
-        this.renderer.setStyle(this.ghostElement, 'font-weight', '500');
-        this.renderer.setProperty(this.ghostElement, 'innerText', `🗂 Выбрано элементов: ${ids.length}`);
+        this.renderer.setProperty(this.ghostElement, 'innerText', `🗂 Перенос элементов: ${ids.length}`);
 
         this.renderer.appendChild(document.body, this.ghostElement);
         this.updateGhostPosition();
 
         this.isDragging.set(true);
         this.disableTextSelection();
-        this.addDropZoneListeners();
     }
 
     private updateGhostPosition() {
@@ -133,46 +152,81 @@ export class DragDropService {
         this.renderer.setStyle(this.ghostElement, 'top', `${this.currentMouseY + 15}px`);
     }
 
-    private highlightDropZone(event: MouseEvent) {
+    private calculateDropTarget(event: MouseEvent) {
         const target = event.target as HTMLElement;
-        const zone = target.closest('.drop-zone') as HTMLElement;
 
-        if (this.currentDropZone === zone) return;
+        const header = target.closest('.panel-header') as HTMLElement;
+        const emptyZone = !header ? (target.closest('.drop-zone') as HTMLElement) : null;
+        const element = header || emptyZone;
 
-        if (this.currentDropZone) {
-            this.renderer.removeClass(this.currentDropZone, 'drop-allowed');
-            this.renderer.removeClass(this.currentDropZone, 'drop-denied');
+        if (this.currentTargetElement && this.currentTargetElement !== element) {
+            this.clearTargetStyles(this.currentTargetElement);
         }
 
-        this.currentDropZone = zone;
-        if (!zone) return;
+        this.currentTargetElement = element;
+        if (!element) {
+            this.currentDropPosition = null;
+            return;
+        }
 
-        const targetId = zone.dataset['dropZoneId'];
-        if (!targetId) return;
+        if (emptyZone) {
+            const zoneId = emptyZone.dataset['dropZoneId'];
+            if (!zoneId || this.dragIds.includes(zoneId) || this.isTargetChildOfDragged(zoneId)) {
+                this.renderer.addClass(emptyZone, 'drop-denied');
+                this.currentDropPosition = null;
+                return;
+            }
+            this.renderer.addClass(emptyZone, 'drop-inside');
+            this.currentDropPosition = 'inside';
+            return;
+        }
 
-        if (this.isDropAllowed(targetId)) {
-            this.renderer.addClass(zone, 'drop-allowed');
+        const targetId = header.dataset['projectId'];
+        if (!targetId || this.dragIds.includes(targetId) || this.isTargetChildOfDragged(targetId)) {
+            this.currentDropPosition = null;
+            this.renderer.addClass(header, 'drop-denied');
+            return;
+        }
+
+        const rect = header.getBoundingClientRect();
+        const relativeY = event.clientY - rect.top;
+
+        if (relativeY < rect.height * 0.3) {
+            this.currentDropPosition = 'before';
+            this.renderer.removeClass(header, 'drop-after');
+            this.renderer.removeClass(header, 'drop-inside');
+            this.renderer.addClass(header, 'drop-before');
+        } else if (relativeY > rect.height * 0.7) {
+            this.currentDropPosition = 'after';
+            this.renderer.removeClass(header, 'drop-before');
+            this.renderer.removeClass(header, 'drop-inside');
+            this.renderer.addClass(header, 'drop-after');
         } else {
-            this.renderer.addClass(zone, 'drop-denied');
+            this.currentDropPosition = 'inside';
+            this.renderer.removeClass(header, 'drop-before');
+            this.renderer.removeClass(header, 'drop-after');
+            this.renderer.addClass(header, 'drop-inside');
         }
     }
 
-    private isDropAllowed(targetParentId: string): boolean {
-        if (this.dragIds.includes(targetParentId)) return false;
-        if (this.dragIds.some(id => this.isAncestor(id, targetParentId))) return false;
-        return true;
+    private clearTargetStyles(el: HTMLElement) {
+        this.renderer.removeClass(el, 'drop-before');
+        this.renderer.removeClass(el, 'drop-after');
+        this.renderer.removeClass(el, 'drop-inside');
+        this.renderer.removeClass(el, 'drop-denied');
     }
 
-    private isAncestor(potentialAncestorId: string, currentId: string): boolean {
+    private isTargetChildOfDragged(targetId: string): boolean {
         const map = this.getChildrenMap();
-        let currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === currentId));
-
-        while (currentParentId) {
-            if (currentParentId === potentialAncestorId) return true;
-            const nextParent = currentParentId;
-            currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === nextParent));
-        }
-        return false;
+        return this.dragIds.some(dragId => {
+            let currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === targetId));
+            while (currentParentId) {
+                if (currentParentId === dragId) return true;
+                const nextParent = currentParentId;
+                currentParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === nextParent));
+            }
+            return false;
+        });
     }
 
     private onMouseUp(event: MouseEvent): void {
@@ -181,18 +235,16 @@ export class DragDropService {
         if (this.isDragging()) {
             this.finishDrag();
         } else {
-            // Если МЫШКА НЕ ДВИГАЛАСЬ — это чистый клик!
             if (!this.mouseMoved) {
-                // Если клик БЕЗ Ctrl — сбрасываем мульти-выбор до текущего элемента
+                // Если кликнули БЕЗ Ctrl — сбрасываем старый выбор и оставляем активным только текущий узел
                 if (!ctrl) {
                     const clickedZone = event.target as HTMLElement;
                     const header = clickedZone.closest('.panel-header') as HTMLElement;
                     const id = header?.dataset['projectId'];
-                    if (id) {
-                        this.selectedIds.set(new Set([id]));
-                    }
+                    if (id) this.selectedIds.set(new Set([id]));
                 }
-                // Запускаем открытие/закрытие панели
+
+                // Вызываем открытие панели, только если onToggleExpandCallback не занулился из-за Ctrl
                 if (this.onToggleExpandCallback) {
                     this.onToggleExpandCallback();
                 }
@@ -204,10 +256,10 @@ export class DragDropService {
     private finishDrag() {
         this.clearGlobalListeners();
         this.enableTextSelection();
-        this.removeDropZoneListeners();
 
-        const zone = this.currentDropZone;
-        const targetParentId = zone ? zone.dataset['dropZoneId'] : null;
+        if (this.currentTargetElement) {
+            this.clearTargetStyles(this.currentTargetElement);
+        }
 
         this.dragIds.forEach(id => {
             const el = document.querySelector(`[data-project-id="${id}"]`) as HTMLElement;
@@ -219,58 +271,17 @@ export class DragDropService {
             this.ghostElement = null;
         }
 
-        if (targetParentId && this.isDropAllowed(targetParentId)) {
-            if (this.moveCallback) {
-                this.moveCallback(this.dragIds, targetParentId);
-            }
-            this.selectedIds.set(new Set());
-        }
+        if (this.currentTargetElement && this.currentDropPosition) {
+            const map = this.getChildrenMap();
 
-        this.isDragging.set(false);
-        this.potentialDrag = false;
-        this.dragIds = [];
-        this.currentDropZone = null;
-        this.onToggleExpandCallback = null;
-    }
-
-    private stopPotentialDrag() {
-        this.clearGlobalListeners();
-        this.potentialDrag = false;
-        this.mouseMoved = false;
-        this.onToggleExpandCallback = null;
-    }
-
-    private disableTextSelection() {
-        if (this.userSelectStyle) return;
-        const style = this.renderer.createElement('style');
-        style.innerHTML = `* { user-select: none !important; -webkit-user-select: none !important; }`;
-        this.renderer.appendChild(document.head, style);
-        this.userSelectStyle = style;
-    }
-
-    private enableTextSelection() {
-        if (this.userSelectStyle) {
-            this.renderer.removeChild(document.head, this.userSelectStyle);
-            this.userSelectStyle = null;
-        }
-    }
-
-    private addDropZoneListeners() {
-        document.querySelectorAll('.drop-zone').forEach(zone => {
-            this.renderer.addClass(zone, 'drop-zone-active');
-        });
-    }
-
-    private removeDropZoneListeners() {
-        document.querySelectorAll('.drop-zone').forEach(zone => {
-            this.renderer.removeClass(zone, 'drop-zone-active');
-            this.renderer.removeClass(zone, 'drop-allowed');
-            this.renderer.removeClass(zone, 'drop-denied');
-        });
-    }
-
-    private clearGlobalListeners() {
-        this.removeGlobalListeners.forEach(fn => fn());
-        this.removeGlobalListeners = [];
-    }
+            if (this.currentDropPosition === 'inside') {
+                const targetParentId = this.currentTargetElement.dataset['projectId'] || this.currentTargetElement.dataset['dropZoneId']!;
+                if (this.moveCallback) {
+                    this.moveCallback(this.dragIds, targetParentId, undefined, 'inside');
+                }
+            } else {
+                const relativeToId = this.currentTargetElement.dataset['projectId']!; const targetParentId = Object.keys(map).find(pid => map[pid].some(p => p.id === relativeToId)); if (targetParentId && this.moveCallback) { this.moveCallback(this.dragIds, targetParentId, relativeToId, this.currentDropPosition); }
+            } this.selectedIds.set(new Set());
+        } this.isDragging.set(false); this.potentialDrag = false; this.dragIds = []; this.currentTargetElement = null; this.currentDropPosition = null; this.onToggleExpandCallback = null;
+    } private stopPotentialDrag() { this.clearGlobalListeners(); this.potentialDrag = false; this.mouseMoved = false; this.onToggleExpandCallback = null; } private disableTextSelection() { this.renderer.setStyle(document.body, 'user-select', 'none'); this.renderer.setStyle(document.body, '-webkit-user-select', 'none'); } private enableTextSelection() { this.renderer.removeStyle(document.body, 'user-select'); this.renderer.removeStyle(document.body, '-webkit-user-select'); } private clearGlobalListeners() { this.removeGlobalListeners.forEach(fn => fn()); this.removeGlobalListeners = []; }
 }

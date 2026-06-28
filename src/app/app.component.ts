@@ -8,7 +8,8 @@ import { DragDropService } from './drag-drop.service';
   standalone: true,
   imports: [ProjectNodeComponent],
   template: `
-    <div class="tree-container" data-drop-zone-id="__root__">
+    <!-- Корневой контейнер теперь тоже является Drop-зоной для пустых пространств -->
+    <div class="tree-container drop-zone" data-drop-zone-id="__root__">
       @if (rootProject(); as root) {
         <app-project-node
           [project]="root"
@@ -18,11 +19,10 @@ import { DragDropService } from './drag-drop.service';
     </div>
   `,
   styles: [`
-    .tree-container { padding: 20px; max-width: 600px; font-family: sans-serif; }
+    .tree-container { padding: 20px; max-width: 600px; font-family: sans-serif; min-height: 500px; }
   `]
 })
 export class AppComponent {
-  // Наша реактивная база данных дерева
   projectMap: WritableSignal<Record<string, Project[]>> = signal({
     __root__: [{ id: 'root', name: 'Корневой проект' }],
     root: [
@@ -38,35 +38,48 @@ export class AppComponent {
   rootProject = computed(() => this.projectMap()['__root__']?.[0]);
 
   constructor(private dragDrop: DragDropService) {
-    // Привязываем коллбеки к сервису с сохранением контекста
-    this.dragDrop.moveCallback = (ids, targetParentId) => this.moveElements(ids, targetParentId);
+    this.dragDrop.moveCallback = (ids, targetParentId, relativeToId, position) => {
+      this.moveElements(ids, targetParentId, relativeToId, position);
+    };
     this.dragDrop.getChildrenMap = () => this.projectMap();
   }
 
-  private moveElements(ids: string[], targetParentId: string) {
+  private moveElements(ids: string[], targetParentId: string, relativeToId?: string, position?: 'before' | 'after' | 'inside') {
     this.projectMap.update(map => {
       const newMap = { ...map };
       const removedElements: Project[] = [];
 
-      // 1. Извлекаем все переносимые элементы из их текущих позиций
+      // 1. Извлекаем переносимые элементы
       for (const [parentId, children] of Object.entries(newMap)) {
         const kept = children.filter(c => !ids.includes(c.id));
         const taken = children.filter(c => ids.includes(c.id));
-
         if (taken.length > 0) {
           removedElements.push(...taken);
           newMap[parentId] = kept;
         }
       }
 
-      // 2. Инициализируем целевую папку, если она пустая
       if (!newMap[targetParentId]) {
         newMap[targetParentId] = [];
       }
 
-      // 3. Вставляем элементы в новую целевую папку
-      newMap[targetParentId] = [...newMap[targetParentId], ...removedElements];
+      const targetChildren = [...newMap[targetParentId]];
 
+      // 2. Если вставляем внутрь пустой папки или напрямую в drop-зону без относительного ID
+      if (!relativeToId || position === 'inside') {
+        targetChildren.push(...removedElements);
+      } else {
+        // 3. Если вставляем относительно соседа (сортировка)
+        const referenceIndex = targetChildren.findIndex(p => p.id === relativeToId);
+        let insertIndex = targetChildren.length;
+
+        if (referenceIndex !== -1) {
+          insertIndex = position === 'after' ? referenceIndex + 1 : referenceIndex;
+        }
+        targetChildren.splice(insertIndex, 0, ...removedElements);
+      }
+
+      newMap[targetParentId] = targetChildren;
       return newMap;
     });
   }

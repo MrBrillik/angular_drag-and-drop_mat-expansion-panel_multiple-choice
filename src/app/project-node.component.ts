@@ -15,14 +15,16 @@ import { DragDropService } from './drag-drop.service';
       hideToggle
     >
       <!-- 
-        Важно: Отключаем дефолтный клик Material через $event.stopPropagation(), 
-        чтобы он не перехватывал управление и не открывал панель раньше времени.
+        Добавили (click.meta) и (click.control) с остановкой всплытия, 
+        чтобы клик с зажатыми клавишами-модификаторами не долетал до внутренностей Material
       -->
       <mat-expansion-panel-header
         class="panel-header"
         [class.selected]="isSelected()"
         (mousedown)="onHeaderMouseDown($event)"
         (click)="$event.stopPropagation(); $event.preventDefault()"
+        (click.control)="$event.stopPropagation(); $event.preventDefault()"
+        (click.meta)="$event.stopPropagation(); $event.preventDefault()"
         [attr.data-project-id]="project.id"
       >
         <mat-panel-title>{{ project.name }}</mat-panel-title>
@@ -39,15 +41,29 @@ import { DragDropService } from './drag-drop.service';
     </mat-expansion-panel>
   `,
   styles: [`
-    .project-panel { margin: 4px 0; box-shadow: none !important; border: 1px solid #e0e0e0; }
-    .panel-header { cursor: grab; user-select: none; -webkit-user-select: none; transition: background 0.1s; }
+    .project-panel { margin: 2px 0; box-shadow: none !important; border: 1px solid #e0e0e0; }
+    .panel-header { cursor: grab; user-select: none; -webkit-user-select: none; position: relative; }
     .panel-header:active { cursor: grabbing; }
     .panel-header.selected { background: #b3e5fc !important; }
-    .children-container { padding-left: 20px; min-height: 15px; transition: background-color 0.2s ease; }
     
-    .drop-zone-active { border: 1px dashed #b0bec5; }
-    .drop-allowed { background-color: rgba(76, 175, 80, 0.15) !important; border: 1px dashed #4caf50; }
-    .drop-denied { background-color: rgba(244, 67, 54, 0.15) !important; border: 1px dashed #f44336; }
+    .children-container { padding-left: 20px; min-height: 12px; transition: background-color 0.15s; }
+    
+    .children-container.drop-inside {
+      background-color: rgba(76, 175, 80, 0.15) !important; border: 1px dashed #4caf50;
+    }
+
+    .panel-header.drop-before::before {
+      content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: #4caf50; z-index: 10;
+    }
+    .panel-header.drop-after::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #4caf50; z-index: 10;
+    }
+    .panel-header.drop-inside {
+      background-color: rgba(76, 175, 80, 0.2) !important; border: 1px dashed #4caf50;
+    }
+    .panel-header.drop-denied, .children-container.drop-denied {
+      background-color: rgba(244, 67, 54, 0.15) !important;
+    }
   `]
 })
 export class ProjectNodeComponent {
@@ -62,12 +78,10 @@ export class ProjectNodeComponent {
   constructor(private dragDrop: DragDropService) { }
 
   onHeaderMouseDown(event: MouseEvent) {
-    if (event.button !== 0) return; // Только левая кнопка мыши
+    if (event.button !== 0) return;
 
-    // Передаем в сервис ссылку на функцию переключения развернутого состояния папки.
-    // Сервис сам решит: если мышка не двигалась (это клик), он вызовет этот toggle.
+    // Передаем коллбек управления открытием/закрытием
     const toggleExpandFn = () => this.expanded.set(!this.expanded());
-
     this.dragDrop.onHeaderMouseDown(event, this.project.id, toggleExpandFn);
   }
 }
